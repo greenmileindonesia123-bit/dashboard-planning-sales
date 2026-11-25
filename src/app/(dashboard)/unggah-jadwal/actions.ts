@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { expansionWindow, MAX_ICS_BYTES, parseIcsCalendar, type CalendarDraft } from "@/lib/calendar-ics";
 import { calendarOwnerEmail } from "@/lib/calendar-owner";
 import { civilDateInJakarta } from "@/lib/jakarta";
+import { ICS_UPLOAD_SOURCE, isMissingSharedCalendarSchema } from "@/lib/shared-calendar";
 import { getViewer } from "@/lib/session";
 import { createClient } from "@/lib/supabase/server";
 
@@ -44,6 +45,7 @@ export async function importCalendarFile(formData: FormData): Promise<CalendarPr
   for (let index = 0; index < prepared.events.length; index += chunkSize) {
     const chunk = prepared.events.slice(index, index + chunkSize).map((event) => ({
       sales_email: prepared.preview.ownerEmail,
+      sales_profile_id: prepared.ownerId,
       google_event_id: event.googleEventId,
       title: event.title,
       starts_at: event.startsAt,
@@ -52,8 +54,24 @@ export async function importCalendarFile(formData: FormData): Promise<CalendarPr
       location: event.location,
       html_link: event.htmlLink,
       status: event.status,
+      source: ICS_UPLOAD_SOURCE,
     }));
-    const { error } = await supabase.from("calendar_events").upsert(chunk, { onConflict: "sales_email,google_event_id" });
+    let { error } = await supabase.from("calendar_events").upsert(chunk, { onConflict: "source,sales_email,google_event_id" });
+    if (error && isMissingSharedCalendarSchema(error.message)) {
+      const legacy = chunk.map((row) => ({
+        sales_email: row.sales_email,
+        google_event_id: row.google_event_id,
+        title: row.title,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        all_day: row.all_day,
+        location: row.location,
+        html_link: row.html_link,
+        status: row.status,
+      }));
+      const retry = await supabase.from("calendar_events").upsert(legacy, { onConflict: "sales_email,google_event_id" });
+      error = retry.error;
+    }
     if (error) {
       return { ok: false, message: "Jadwal tidak dapat disimpan. Jalankan migrasi tulis kalender." };
     }
@@ -61,7 +79,7 @@ export async function importCalendarFile(formData: FormData): Promise<CalendarPr
   return { ...prepared.preview, saved: true };
 }
 
-async function prepare(formData: FormData): Promise<{ ok: true; preview: CalendarPreview; events: CalendarDraft[] } | CalendarFailure> {
+async function prepare(formData: FormData): Promise<{ ok: true; preview: CalendarPreview; events: CalendarDraft[]; ownerId: string } | CalendarFailure> {
   const viewer = await getViewer();
   if (viewer.kind !== "ok") redirect("/login");
   const file = formData.get("file");
@@ -95,6 +113,7 @@ async function prepare(formData: FormData): Promise<{ ok: true; preview: Calenda
   return {
     ok: true,
     events: parsed.events,
+    ownerId: owner.id,
     preview: {
       ok: true,
       fileName: file.name,
@@ -128,13 +147,13 @@ function validateIcsFile(file: File): string | null {
   return null;
 }
 
-async function loadActiveEmails(): Promise<{ name: string; email: string }[] | null> {
+async function loadActiveEmails(): Promise<{ id: string; name: string; email: string }[] | null> {
   const supabase = await createClient();
-  const { data, error } = await supabase.from("sales_profiles").select("name, email").eq("status", "Aktif").order("roster_order");
+  const { data, error } = await supabase.from("sales_profiles").select("id, name, email").eq("status", "Aktif").order("roster_order");
   if (error || !data) return null;
   return data
     .filter((person) => person.email)
-    .map((person) => ({ name: String(person.name), email: String(person.email).toLowerCase() }));
+    .map((person) => ({ id: String(person.id), name: String(person.name), email: String(person.email).toLowerCase() }));
 }
 
 async function loadExistingIds(salesEmail: string, ids: string[]): Promise<string[]> {

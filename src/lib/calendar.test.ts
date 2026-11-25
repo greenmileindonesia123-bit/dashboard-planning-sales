@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   eventOverlapsCivilDay,
   eventsForSchedule,
+  isOwnedScheduleEvent,
   jakartaDayBounds,
   jakartaHour,
   safeEventLink,
@@ -113,6 +114,12 @@ test("sales and non-admin PPIC see only their events, and Super Admin can filter
     selectedEmail: null,
   });
   assert.deepEqual(noEmail, []);
+});
+
+test("a shared event without an email or sales profile is unowned", () => {
+  assert.equal(isOwnedScheduleEvent({ salesEmail: "", salesProfileId: null }), false);
+  assert.equal(isOwnedScheduleEvent({ salesEmail: "sales002.gmi@gmail.com" }), true);
+  assert.equal(isOwnedScheduleEvent({ salesEmail: "", salesProfileId: "profile-1" }), true);
 });
 
 test("only http links are rendered for a calendar event", () => {

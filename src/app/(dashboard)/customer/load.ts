@@ -49,12 +49,12 @@ export async function loadCustomerDetail(viewer: Viewer, slug: string, today: st
     summary,
     loaded.visits,
     loaded.orders,
-    ((data ?? []) as { title: string | null; starts_at: string; location: string | null; sales_email: string }[]).map((event) => ({
+    ((data ?? []) as { title: string | null; starts_at: string; location: string | null; sales_email: string | null }[]).map((event) => ({
       title: event.title ?? "",
       startsAt: event.starts_at,
       location: event.location,
-      salesEmail: event.sales_email,
-      salesName: roster.get(event.sales_email) || event.sales_email,
+      salesEmail: event.sales_email ?? "",
+      salesName: (event.sales_email && roster.get(event.sales_email)) || event.sales_email || "Belum dipetakan",
     })),
   );
   return { summary, timeline, error: loaded.error };

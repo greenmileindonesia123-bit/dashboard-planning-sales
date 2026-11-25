@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { CalendarUploadForm } from "@/app/(dashboard)/unggah-jadwal/upload-form";
 import { AccessState } from "@/components/access-state";
+import { PullSharedCalendarButton } from "@/components/pull-shared-calendar-button";
 import { isSuperAdmin } from "@/lib/access";
 import { getViewer, loadRoster } from "@/lib/session";
 
@@ -44,6 +45,17 @@ async function CalendarUploadScreen() {
         <li>Periksa pratinjau, lalu simpan. Mengunggah berkas yang sama memperbarui acara, bukan menggandakannya.</li>
         <li>Acara berulang ditampilkan sekitar dua bulan sebelum hingga enam bulan sesudah bulan ini. Zona waktu Asia/Jakarta.</li>
       </ol>
+      {canChooseOwner ? (
+        <section className="space-y-3 rounded-2xl bg-card p-5 ring-1 ring-foreground/10" aria-labelledby="tarik-kalender-bersama">
+          <h2 id="tarik-kalender-bersama" className="font-heading text-xl tracking-tight">
+            Kalender bersama
+          </h2>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Tarik jadwal publik Kunjungan sales. Mengulang tarikan memperbarui acara yang sama dan menghapus acara yang sudah tidak ada di umpan.
+          </p>
+          <PullSharedCalendarButton />
+        </section>
+      ) : null}
       <CalendarUploadForm canChooseOwner={canChooseOwner} people={people} />
     </div>
   );

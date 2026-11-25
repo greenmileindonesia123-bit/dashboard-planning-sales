@@ -16,7 +16,13 @@ export type ScheduleEvent = {
   htmlLink: string | null;
   status: string;
   kind?: "kalender" | "kunjungan-ulang";
+  salesProfileId?: string | null;
+  ownerName?: string | null;
 };
+
+export function isOwnedScheduleEvent(event: Pick<ScheduleEvent, "salesEmail" | "salesProfileId">): boolean {
+  return Boolean(event.salesEmail.trim() || event.salesProfileId);
+}
 
 export type ScheduleScope = {
   superAdmin: boolean;
