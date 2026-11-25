@@ -15,6 +15,9 @@ export type CalendarDraft = {
   location: string | null;
   htmlLink: string | null;
   status: "confirmed" | "tentative" | "cancelled";
+  description: string | null;
+  organizerEmail: string | null;
+  attendeeEmails: string[];
 };
 
 export type IcsParseResult = {
@@ -97,7 +100,7 @@ function occurrenceDraft(
   details: ReturnType<ICAL.Event["getOccurrenceDetails"]>,
 ): CalendarDraft | null {
   const recurrenceId = details.recurrenceId?.toJSDate().toISOString() ?? details.startDate.toJSDate().toISOString();
-  return buildDraft(
+  const draft = buildDraft(
     `${event.uid}::${recurrenceId}`,
     details.item.component,
     details.startDate,
@@ -105,6 +108,8 @@ function occurrenceDraft(
     details.item.summary || event.summary,
     true,
   );
+  if (!draft) return null;
+  return withMasterParticipants(draft, event.component);
 }
 
 function buildDraft(
@@ -129,6 +134,40 @@ function buildDraft(
     location: emptyToNull(plainText(String(component.getFirstPropertyValue("location") ?? ""))),
     htmlLink: httpLink(component.getFirstPropertyValue("url")),
     status,
+    ...readParticipants(component),
+  };
+}
+
+function withMasterParticipants(draft: CalendarDraft, master: ICAL.Component): CalendarDraft {
+  const extra = readParticipants(master);
+  const organizerEmail = draft.organizerEmail ?? extra.organizerEmail;
+  const attendeeEmails = [...draft.attendeeEmails];
+  for (const email of extra.attendeeEmails) {
+    if (email !== organizerEmail && !attendeeEmails.includes(email)) attendeeEmails.push(email);
+  }
+  if (extra.organizerEmail && extra.organizerEmail !== organizerEmail && !attendeeEmails.includes(extra.organizerEmail)) {
+    attendeeEmails.push(extra.organizerEmail);
+  }
+  return {
+    ...draft,
+    description: draft.description ?? extra.description,
+    organizerEmail,
+    attendeeEmails: attendeeEmails.filter((email) => email !== organizerEmail),
+  };
+}
+
+function readParticipants(component: ICAL.Component): Pick<CalendarDraft, "description" | "organizerEmail" | "attendeeEmails"> {
+  const organizerEmail = emailAddress(component.getFirstPropertyValue("organizer"));
+  const attendeeEmails: string[] = [];
+  for (const property of component.getAllProperties("attendee")) {
+    const email = emailAddress(property.getFirstValue());
+    if (!email || email === organizerEmail || attendeeEmails.includes(email)) continue;
+    attendeeEmails.push(email);
+  }
+  return {
+    description: descriptionText(component.getFirstPropertyValue("description")),
+    organizerEmail,
+    attendeeEmails,
   };
 }
 
@@ -183,4 +222,24 @@ function emptyToNull(value: string): string | null {
 
 function plainText(value: unknown): string {
   return String(value ?? "").replace(/<[^>]*>/g, "").replace(/\u0000/g, "").trim();
+}
+
+const EMAIL_ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function emailAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const withoutScheme = value.trim().replace(/^mailto:/i, "").split("?")[0]?.trim().toLowerCase() ?? "";
+  if (!EMAIL_ADDRESS.test(withoutScheme)) return null;
+  return withoutScheme;
+}
+
+function descriptionText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\u0000/g, "")
+    .trim();
+  return text || null;
 }

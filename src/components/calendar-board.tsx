@@ -260,7 +260,7 @@ function EventChip({
   const followUp = event.kind === "kunjungan-ulang";
   const title = event.title.trim() || "Tanpa judul";
   const when = event.allDay ? "Seharian" : `${formatJakartaClock(event.startsAt)}–${formatJakartaClock(event.endsAt)}`;
-  const owner = showOwner ? owners[event.salesEmail] || event.salesEmail : null;
+  const owner = showOwner ? owners[event.salesEmail] || event.ownerName || event.salesEmail || null : null;
   const href = safeEventLink(event.htmlLink);
   const body = (
     <>

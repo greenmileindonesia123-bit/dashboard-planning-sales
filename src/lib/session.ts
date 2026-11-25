@@ -2,6 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
+import { isSuperAdmin } from "@/lib/access";
+import { isMissingSharedCalendarSchema } from "@/lib/shared-calendar";
 import { getSupabaseEnv } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
 import type { ScheduleEvent } from "@/lib/calendar";
@@ -222,7 +224,8 @@ export async function loadFollowUps(): Promise<{
 }
 
 type CalendarRow = {
-  sales_email: string;
+  sales_email: string | null;
+  sales_profile_id?: string | null;
   google_event_id: string;
   title: string | null;
   starts_at: string;
@@ -233,27 +236,86 @@ type CalendarRow = {
   status: string;
 };
 
+const CALENDAR_COLUMNS =
+  "sales_email, sales_profile_id, google_event_id, title, starts_at, ends_at, all_day, location, html_link, status";
+const LEGACY_CALENDAR_COLUMNS =
+  "sales_email, google_event_id, title, starts_at, ends_at, all_day, location, html_link, status";
+
 export async function loadCalendarEvents(
   start: Date,
   end: Date,
   salesEmail: string | null,
+  salesProfileId: string | null = null,
 ): Promise<{ viewer: ViewerResult; events: ScheduleEvent[]; error: string | null }> {
   const viewer = await getViewer();
   if (viewer.kind !== "ok") return { viewer, events: [], error: null };
-  if (salesEmail === "") return { viewer, events: [], error: null };
+  if (!salesProfileId && salesEmail === "") return { viewer, events: [], error: null };
+  const loaded = await readCalendarPages(start, end, salesEmail, salesProfileId, CALENDAR_COLUMNS);
+  if (loaded.error && !salesProfileId && isMissingSharedCalendarSchema(loaded.error)) {
+    const legacy = await readCalendarPages(start, end, salesEmail, null, LEGACY_CALENDAR_COLUMNS);
+    if (legacy.error) return { viewer, events: [], error: legacy.error };
+    return { viewer, events: legacy.rows.map(mapCalendarRow), error: null };
+  }
+  if (loaded.error) return { viewer, events: [], error: loaded.error };
+  return { viewer, events: loaded.rows.map(mapCalendarRow), error: null };
+}
+
+export async function loadUnmappedSharedEvents(
+  start: Date,
+  end: Date,
+): Promise<{ events: ScheduleEvent[]; error: string | null }> {
+  const viewer = await getViewer();
+  if (viewer.kind !== "ok" || !isSuperAdmin(viewer)) return { events: [], error: null };
   const supabase = await createClient();
-  let query = supabase
+  const { data, error } = await supabase
     .from("calendar_events")
-    .select("sales_email, google_event_id, title, starts_at, ends_at, all_day, location, html_link, status")
+    .select(CALENDAR_COLUMNS)
+    .eq("source", "shared_calendar")
+    .is("sales_email", null)
+    .is("sales_profile_id", null)
     .neq("status", "cancelled")
     .lt("starts_at", end.toISOString())
     .gt("ends_at", start.toISOString())
-    .order("starts_at", { ascending: true });
-  if (salesEmail) query = query.eq("sales_email", salesEmail.toLowerCase());
-  const { data, error } = await query;
-  if (error) return { viewer, events: [], error: error.message };
-  const events = ((data ?? []) as CalendarRow[]).map((row) => ({
-    salesEmail: row.sales_email,
+    .order("starts_at", { ascending: true })
+    .limit(200);
+  if (error) return { events: [], error: error.message };
+  return { events: ((data ?? []) as CalendarRow[]).map(mapCalendarRow), error: null };
+}
+
+async function readCalendarPages(
+  start: Date,
+  end: Date,
+  salesEmail: string | null,
+  salesProfileId: string | null,
+  columns: string,
+): Promise<{ rows: CalendarRow[]; error: string | null }> {
+  const supabase = await createClient();
+  const rows: CalendarRow[] = [];
+  for (let page = 0; page < 5; page += 1) {
+    let query = supabase
+      .from("calendar_events")
+      .select(columns)
+      .neq("status", "cancelled")
+      .lt("starts_at", end.toISOString())
+      .gt("ends_at", start.toISOString())
+      .order("starts_at", { ascending: true })
+      .order("google_event_id", { ascending: true });
+    if (salesProfileId) query = query.eq("sales_profile_id", salesProfileId);
+    else if (salesEmail) query = query.eq("sales_email", salesEmail.toLowerCase());
+    const from = page * 1000;
+    const { data, error } = await query.range(from, from + 999);
+    if (error) return { rows: [], error: error.message };
+    const chunk = (data ?? []) as unknown as CalendarRow[];
+    rows.push(...chunk);
+    if (chunk.length < 1000) break;
+  }
+  return { rows, error: null };
+}
+
+function mapCalendarRow(row: CalendarRow): ScheduleEvent {
+  return {
+    salesEmail: row.sales_email ?? "",
+    salesProfileId: row.sales_profile_id ?? null,
     googleEventId: row.google_event_id,
     title: row.title ?? "",
     startsAt: row.starts_at,
@@ -263,8 +325,7 @@ export async function loadCalendarEvents(
     htmlLink: row.html_link,
     status: row.status,
     kind: "kalender" as const,
-  }));
-  return { viewer, events, error: null };
+  };
 }
 
 export async function loadFollowUpVisits(
